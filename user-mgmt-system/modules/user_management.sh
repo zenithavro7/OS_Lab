@@ -74,14 +74,22 @@ delete_user() {
 
 list_users() {
     # OS concept: UID >= 1000 is conventionally a regular (non-system) user on Linux
-    echo -e "${GREEN}Regular users (UID >= 1000):${NC}"
-    printf "%-20s %-8s %-30s\n" "USERNAME" "UID" "GROUPS"
-    echo "---------------------------------------------------------------"
+    local BOLD=$'\033[1m' DIM=$'\033[2m' RST=$'\033[0m' CY=$'\033[38;5;87m'
+    printf '  %s┌──────────────────────┬────────┬──────────────────────────────┐%s\n' "$DIM" "$RST"
+    printf '  %s│%s %-20s %s│%s %-6s %s│%s %-28s %s│%s\n' \
+        "$DIM" "$BOLD$CY" "USERNAME" "$RST$DIM" "$BOLD$CY" "UID" \
+        "$RST$DIM" "$BOLD$CY" "GROUPS" "$RST$DIM" "$RST"
+    printf '  %s├──────────────────────┼────────┼──────────────────────────────┤%s\n' "$DIM" "$RST"
+    local count=0
     while IFS=: read -r uname _ uid _ _ _ _; do
         if (( uid >= 1000 && uid < 65534 )); then
             local groups
             groups=$(id -nG "$uname" 2>/dev/null | tr ' ' ',')
-            printf "%-20s %-8s %-30s\n" "$uname" "$uid" "$groups"
+            printf '  %s│%s %-20s %s│%s %-6s %s│%s %-28.28s %s│%s\n' \
+                "$DIM" "$RST" "$uname" "$DIM" "$RST" "$uid" "$DIM" "$RST" "$groups" "$DIM" "$RST"
+            count=$((count+1))
         fi
     done < /etc/passwd
+    printf '  %s└──────────────────────┴────────┴──────────────────────────────┘%s\n' "$DIM" "$RST"
+    printf '  %s%d user(s) found.%s\n' "$DIM" "$count" "$RST"
 }

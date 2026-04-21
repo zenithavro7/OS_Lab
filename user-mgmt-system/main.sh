@@ -7,16 +7,28 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/logs/activity.log"
 
-# ANSI color codes
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# ─── Color palette (256-color + bold) ─────────────────────────────────────
+RED=$'\033[38;5;203m'       # soft red
+GREEN=$'\033[38;5;114m'     # mint
+YELLOW=$'\033[38;5;221m'    # amber
+BLUE=$'\033[38;5;111m'      # sky blue
+CYAN=$'\033[38;5;87m'       # aqua
+MAGENTA=$'\033[38;5;177m'   # lavender
+GREY=$'\033[38;5;244m'      # muted grey
+WHITE=$'\033[38;5;255m'
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+RESET=$'\033[0m'
 
-# Root check: OS concept - only UID 0 may modify /etc/passwd, /etc/shadow
+# Background accent for section headers
+BG_ACCENT=$'\033[48;5;24m\033[38;5;231m'  # deep blue bg, white fg
+
+# ─── Root check ───────────────────────────────────────────────────────────
+# Only UID 0 may modify /etc/passwd, /etc/shadow
 if [[ $EUID -ne 0 ]]; then
-    echo -e "${RED}[ERROR]${NC} This script must be run as root (sudo)." >&2
+    printf '\n  %s✘ ACCESS DENIED%s  This tool must be run as %sroot%s.\n' \
+        "$RED$BOLD" "$RESET" "$BOLD" "$RESET"
+    printf '  %sTry:%s sudo ./main.sh\n\n' "$GREY" "$RESET"
     exit 1
 fi
 
@@ -29,7 +41,7 @@ for mod in user_management role_access password_policy login_monitor; do
         # shellcheck disable=SC1090
         source "$SCRIPT_DIR/modules/${mod}.sh"
     else
-        echo -e "${RED}[ERROR]${NC} Missing module: ${mod}.sh" >&2
+        printf '%s✘ Missing module:%s %s\n' "$RED" "$RESET" "${mod}.sh" >&2
         exit 1
     fi
 done
@@ -39,76 +51,266 @@ log_action() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [admin=$(logname 2>/dev/null || echo root)] $msg" >> "$LOG_FILE"
 }
 
-pause() { read -rp "Press [Enter] to continue..."; }
+# ─── UI helpers ───────────────────────────────────────────────────────────
+term_width() { tput cols 2>/dev/null || echo 80; }
 
-print_menu() {
-    clear
-    echo -e "${BLUE}============================================${NC}"
-    echo -e "${BLUE} User Account & Permission Management System${NC}"
-    echo -e "${BLUE}============================================${NC}"
-    echo " 1) Bulk Create Users (from CSV)"
-    echo " 2) Delete User"
-    echo " 3) List Users"
-    echo " 4) Setup Roles / Workspaces"
-    echo " 5) Assign Role to User"
-    echo " 6) Show Workspace Permissions"
-    echo " 7) Show Password Policy"
-    echo " 8) Enforce Password Policy on User"
-    echo " 9) Check Password Strength"
-    echo "10) Login Report (last 20)"
-    echo "11) Failed Login Attempts"
-    echo "12) Active Users"
-    echo "13) Flag Suspicious Logins"
-    echo "14) Export Full Report"
-    echo " 0) Exit"
-    echo -e "${BLUE}============================================${NC}"
+hr() {
+    local w; w=$(term_width)
+    local ch="${1:-─}"
+    local color="${2:-$GREY}"
+    printf '%s' "$color"
+    printf -- "${ch}%.0s" $(seq 1 "$w")
+    printf '%s\n' "$RESET"
 }
 
+center() {
+    local text="$1"
+    local w; w=$(term_width)
+    local len=${#text}
+    local pad=$(( (w - len) / 2 ))
+    (( pad < 0 )) && pad=0
+    printf "%*s%s\n" "$pad" "" "$text"
+}
+
+banner() {
+    clear
+    local host; host=$(hostname -s 2>/dev/null || echo localhost)
+    local kernel; kernel=$(uname -sr 2>/dev/null || echo "Unknown")
+    local users; users=$(awk -F: '$3>=1000 && $3<65534' /etc/passwd 2>/dev/null | wc -l | tr -d ' ')
+    local now; now=$(date '+%Y-%m-%d %H:%M:%S')
+
+    hr '━' "$BLUE"
+    printf '%s' "$BOLD$CYAN"
+    center "╭─╮  USER ACCOUNT & PERMISSION MANAGEMENT  ╭─╮"
+    printf '%s' "$RESET"
+    printf '%s' "$DIM$GREY"
+    center "A Linux administration toolkit · v1.0"
+    printf '%s' "$RESET"
+    hr '━' "$BLUE"
+
+    # Status bar
+    printf ' %s●%s %shost%s %s%s%s   %s●%s %skernel%s %s%s%s   %s●%s %susers%s %s%s%s   %s●%s %stime%s %s%s%s\n' \
+        "$GREEN" "$RESET" "$GREY" "$RESET" "$BOLD" "$host" "$RESET" \
+        "$MAGENTA" "$RESET" "$GREY" "$RESET" "$BOLD" "$kernel" "$RESET" \
+        "$YELLOW" "$RESET" "$GREY" "$RESET" "$BOLD" "$users" "$RESET" \
+        "$CYAN" "$RESET" "$GREY" "$RESET" "$BOLD" "$now" "$RESET"
+    hr '─' "$GREY"
+}
+
+section() {
+    # $1 = section label
+    printf '\n %s %s %s\n' "$BG_ACCENT$BOLD" "$1" "$RESET"
+}
+
+menu_item() {
+    # $1 = key, $2 = icon, $3 = label, $4 = description
+    printf '  %s[%s%2s%s]%s  %s %-30s %s%s%s\n' \
+        "$GREY" "$BOLD$CYAN" "$1" "$RESET$GREY" "$RESET" \
+        "$2" "$3" "$DIM$GREY" "$4" "$RESET"
+}
+
+ok()    { printf '\n  %s✔ %s%s\n' "$GREEN$BOLD" "$1" "$RESET"; }
+fail()  { printf '\n  %s✘ %s%s\n' "$RED$BOLD"   "$1" "$RESET"; }
+warn()  { printf '\n  %s! %s%s\n' "$YELLOW$BOLD" "$1" "$RESET"; }
+info()  { printf '\n  %s› %s%s\n' "$BLUE$BOLD"  "$1" "$RESET"; }
+
+prompt() {
+    # $1 = label, $2 = default (optional)
+    local label="$1" def="${2:-}"
+    if [[ -n "$def" ]]; then
+        printf '  %s?%s %s %s[%s]%s: ' "$CYAN$BOLD" "$RESET" "$label" "$DIM" "$def" "$RESET"
+    else
+        printf '  %s?%s %s: ' "$CYAN$BOLD" "$RESET" "$label"
+    fi
+}
+
+prompt_secret() {
+    printf '  %s?%s %s: ' "$CYAN$BOLD" "$RESET" "$1"
+}
+
+pause() {
+    printf '\n  %s↵  Press [Enter] to return to menu…%s' "$DIM$GREY" "$RESET"
+    read -r _
+}
+
+confirm() {
+    # $1 = question
+    local ans
+    printf '  %s⚠%s %s %s[y/N]%s: ' "$YELLOW$BOLD" "$RESET" "$1" "$DIM" "$RESET"
+    read -r ans
+    [[ "$ans" =~ ^[Yy]$ ]]
+}
+
+action_header() {
+    # $1 = title
+    clear
+    hr '━' "$CYAN"
+    printf ' %s▸ %s%s\n' "$BOLD$CYAN" "$1" "$RESET"
+    hr '━' "$CYAN"
+    echo
+}
+
+# ─── Menu rendering ───────────────────────────────────────────────────────
+print_menu() {
+    banner
+
+    section "👥  USER MANAGEMENT"
+    menu_item " 1" "📥" "Bulk Create Users"       "import users from CSV"
+    menu_item " 2" "🗑 " "Delete User"             "remove user + home dir"
+    menu_item " 3" "📋" "List Users"              "show all regular users"
+
+    section "🔐  ROLES & ACCESS"
+    menu_item " 4" "🏗 " "Setup Roles / Workspaces" "create groups + /var/workspace"
+    menu_item " 5" "🎭" "Assign Role to User"     "add user to role group"
+    menu_item " 6" "🔍" "Show Workspace Perms"    "inspect chmod/chown"
+
+    section "🛡   PASSWORD POLICY"
+    menu_item " 7" "📄" "Show Current Policy"     "view MIN_LEN / MAX_DAYS etc."
+    menu_item " 8" "⚙ " "Enforce Policy on User"  "apply aging via chage"
+    menu_item " 9" "🔑" "Check Password Strength" "length / upper / digit / special"
+
+    section "📡  LOGIN MONITORING"
+    menu_item "10" "📜" "Login Report"            "last 20 logins"
+    menu_item "11" "🚫" "Failed Attempts"         "grep auth log"
+    menu_item "12" "👁 " "Active Users"            "who + w"
+    menu_item "13" "🚨" "Flag Suspicious"         "threshold-based alerts"
+    menu_item "14" "💾" "Export Full Report"      "snapshot → activity.log"
+
+    section "⚡  SYSTEM"
+    menu_item " 0" "🚪" "Exit"                    "log out and quit"
+
+    hr '─' "$GREY"
+}
+
+# ─── Action wrappers (thin, so the loop stays readable) ───────────────────
+do_bulk_create() {
+    action_header "Bulk Create Users"
+    prompt "Path to CSV" "$SCRIPT_DIR/sample_users.csv"
+    read -r csv
+    csv="${csv:-$SCRIPT_DIR/sample_users.csv}"
+    echo
+    if bulk_create_users "$csv"; then
+        ok "Bulk create finished."
+    else
+        fail "Bulk create reported errors — see output above."
+    fi
+    log_action "Bulk create from $csv"
+}
+
+do_delete_user() {
+    action_header "Delete User"
+    prompt "Username to delete"
+    read -r u
+    [[ -z "$u" ]] && { warn "Empty username — cancelled."; return; }
+    confirm "Permanently delete user '$u' and their home directory?" || { warn "Cancelled."; return; }
+    echo
+    if delete_user "$u"; then
+        ok "User '$u' deleted."
+    else
+        fail "Could not delete '$u'."
+    fi
+    log_action "Deleted user $u"
+}
+
+do_list_users() {
+    action_header "Regular Users (UID ≥ 1000)"
+    list_users
+}
+
+do_setup_roles() {
+    action_header "Setup Roles & Workspaces"
+    setup_roles
+    ok "Roles and workspaces are ready."
+    log_action "Setup roles/workspaces"
+}
+
+do_assign_role() {
+    action_header "Assign Role to User"
+    prompt "Username"; read -r u
+    prompt "Role (admin / developer / intern)"; read -r r
+    echo
+    if assign_role "$u" "$r"; then
+        ok "Assigned '$u' → role '$r'."
+    else
+        fail "Role assignment failed."
+    fi
+    log_action "Assigned $u -> $r"
+}
+
+do_show_perms()     { action_header "Workspace Permissions"; show_permissions; }
+do_show_policy()    { action_header "Current Password Policy"; show_policy; }
+
+do_enforce_policy() {
+    action_header "Enforce Password Policy"
+    prompt "Username"; read -r u
+    echo
+    if enforce_policy "$u"; then
+        ok "Policy applied to '$u'."
+    else
+        fail "Could not enforce policy on '$u'."
+    fi
+    log_action "Enforced policy on $u"
+}
+
+do_check_strength() {
+    action_header "Password Strength Checker"
+    prompt_secret "Password (hidden)"
+    read -rs p; echo; echo
+    check_password_strength "$p"
+}
+
+do_login_report()   { action_header "Last 20 Logins"; show_login_report; }
+do_failed()         { action_header "Failed Login Attempts"; show_failed_attempts; }
+do_active()         { action_header "Currently Active Users"; show_active_users; }
+
+do_flag_suspicious() {
+    action_header "Flag Suspicious Logins"
+    prompt "Failed-attempt threshold" "5"
+    read -r t
+    echo
+    flag_suspicious "${t:-5}"
+}
+
+do_export_report() {
+    action_header "Export Full Report"
+    export_report
+    ok "Report appended to logs/activity.log"
+    log_action "Exported full report"
+}
+
+do_exit() {
+    echo
+    hr '━' "$MAGENTA"
+    center "${BOLD}${MAGENTA}Session ended — goodbye, admin 👋${RESET}"
+    hr '━' "$MAGENTA"
+    log_action "Exit"
+    exit 0
+}
+
+# ─── Main loop ────────────────────────────────────────────────────────────
 main_loop() {
     while true; do
         print_menu
-        read -rp "Select option: " choice
+        printf '\n  %s➜%s  Select an option: ' "$BOLD$GREEN" "$RESET"
+        read -r choice
         case "$choice" in
-            1)
-                read -rp "Path to CSV [${SCRIPT_DIR}/sample_users.csv]: " csv
-                csv="${csv:-$SCRIPT_DIR/sample_users.csv}"
-                bulk_create_users "$csv"
-                log_action "Bulk create from $csv"
-                pause ;;
-            2)
-                read -rp "Username to delete: " u
-                delete_user "$u"
-                log_action "Deleted user $u"
-                pause ;;
-            3) list_users; pause ;;
-            4) setup_roles; log_action "Setup roles/workspaces"; pause ;;
-            5)
-                read -rp "Username: " u
-                read -rp "Role (admin/developer/intern): " r
-                assign_role "$u" "$r"
-                log_action "Assigned $u -> $r"
-                pause ;;
-            6) show_permissions; pause ;;
-            7) show_policy; pause ;;
-            8)
-                read -rp "Username: " u
-                enforce_policy "$u"
-                log_action "Enforced policy on $u"
-                pause ;;
-            9)
-                read -rsp "Password: " p; echo
-                check_password_strength "$p"
-                pause ;;
-            10) show_login_report; pause ;;
-            11) show_failed_attempts; pause ;;
-            12) show_active_users; pause ;;
-            13)
-                read -rp "Threshold [5]: " t
-                flag_suspicious "${t:-5}"
-                pause ;;
-            14) export_report; log_action "Exported full report"; pause ;;
-            0) echo -e "${GREEN}Goodbye.${NC}"; log_action "Exit"; exit 0 ;;
-            *) echo -e "${RED}Invalid choice.${NC}"; pause ;;
+            1)  do_bulk_create;       pause ;;
+            2)  do_delete_user;       pause ;;
+            3)  do_list_users;        pause ;;
+            4)  do_setup_roles;       pause ;;
+            5)  do_assign_role;       pause ;;
+            6)  do_show_perms;        pause ;;
+            7)  do_show_policy;       pause ;;
+            8)  do_enforce_policy;    pause ;;
+            9)  do_check_strength;    pause ;;
+            10) do_login_report;      pause ;;
+            11) do_failed;            pause ;;
+            12) do_active;            pause ;;
+            13) do_flag_suspicious;   pause ;;
+            14) do_export_report;     pause ;;
+            0)  do_exit ;;
+            "") ;; # re-render on empty input
+            *)  fail "Unknown option: '$choice' — pick a number from the menu."; pause ;;
         esac
     done
 }

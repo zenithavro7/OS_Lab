@@ -18,11 +18,16 @@ if [[ -f "$SCRIPT_DIR/config/policy.conf" ]]; then
 fi
 
 show_policy() {
-    echo -e "${GREEN}Current Password Policy:${NC}"
-    echo "  Minimum length        : $MIN_LEN"
-    echo "  Maximum age (days)    : $MAX_DAYS"
-    echo "  Minimum age (days)    : $MIN_DAYS"
-    echo "  Warn before expiry    : $WARN_DAYS days"
+    local BOLD=$'\033[1m' DIM=$'\033[2m' RST=$'\033[0m' CY=$'\033[38;5;87m' GN=$'\033[38;5;114m'
+    printf '  %s┌───────────────────────────┬─────────────┐%s\n' "$DIM" "$RST"
+    printf '  %s│%s %-25s %s│%s %-11s %s│%s\n' \
+        "$DIM" "$BOLD$CY" "SETTING" "$RST$DIM" "$BOLD$CY" "VALUE" "$RST$DIM" "$RST"
+    printf '  %s├───────────────────────────┼─────────────┤%s\n' "$DIM" "$RST"
+    printf '  %s│%s %-25s %s│%s %s%-11s%s %s│%s\n' "$DIM" "$RST" "Minimum length"      "$DIM" "$RST" "$GN" "$MIN_LEN"   "$RST" "$DIM" "$RST"
+    printf '  %s│%s %-25s %s│%s %s%-11s%s %s│%s\n' "$DIM" "$RST" "Maximum age (days)"  "$DIM" "$RST" "$GN" "$MAX_DAYS"  "$RST" "$DIM" "$RST"
+    printf '  %s│%s %-25s %s│%s %s%-11s%s %s│%s\n' "$DIM" "$RST" "Minimum age (days)"  "$DIM" "$RST" "$GN" "$MIN_DAYS"  "$RST" "$DIM" "$RST"
+    printf '  %s│%s %-25s %s│%s %s%-11s%s %s│%s\n' "$DIM" "$RST" "Warn before expiry"  "$DIM" "$RST" "$GN" "$WARN_DAYS" "$RST" "$DIM" "$RST"
+    printf '  %s└───────────────────────────┴─────────────┘%s\n' "$DIM" "$RST"
 }
 
 enforce_policy() {

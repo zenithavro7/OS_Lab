@@ -65,18 +65,24 @@ assign_role() {
 }
 
 show_permissions() {
-    echo -e "${GREEN}Workspace permissions:${NC}"
-    printf "%-30s %-10s %-20s\n" "PATH" "MODE" "OWNER:GROUP"
-    echo "-----------------------------------------------------------------"
+    local BOLD=$'\033[1m' DIM=$'\033[2m' RST=$'\033[0m' CY=$'\033[38;5;87m' RD=$'\033[38;5;203m'
+    printf '  %s┌──────────────────────────────┬────────┬────────────────────┐%s\n' "$DIM" "$RST"
+    printf '  %s│%s %-28s %s│%s %-6s %s│%s %-18s %s│%s\n' \
+        "$DIM" "$BOLD$CY" "PATH" "$RST$DIM" "$BOLD$CY" "MODE" \
+        "$RST$DIM" "$BOLD$CY" "OWNER:GROUP" "$RST$DIM" "$RST"
+    printf '  %s├──────────────────────────────┼────────┼────────────────────┤%s\n' "$DIM" "$RST"
     for role in "${VALID_ROLES[@]}"; do
         local dir="${ROLE_DIRS[$role]:-/var/workspace/$role}"
         if [[ -d "$dir" ]]; then
             local mode owner
             mode=$(stat -c '%a' "$dir" 2>/dev/null || stat -f '%Lp' "$dir")
             owner=$(stat -c '%U:%G' "$dir" 2>/dev/null || stat -f '%Su:%Sg' "$dir")
-            printf "%-30s %-10s %-20s\n" "$dir" "$mode" "$owner"
+            printf '  %s│%s %-28s %s│%s %-6s %s│%s %-18s %s│%s\n' \
+                "$DIM" "$RST" "$dir" "$DIM" "$RST" "$mode" "$DIM" "$RST" "$owner" "$DIM" "$RST"
         else
-            printf "%-30s %-10s %-20s\n" "$dir" "MISSING" "-"
+            printf '  %s│%s %-28s %s│%s %s%-6s%s %s│%s %-18s %s│%s\n' \
+                "$DIM" "$RST" "$dir" "$DIM" "$RST" "$RD" "MISSING" "$RST" "$DIM" "$RST" "-" "$DIM" "$RST"
         fi
     done
+    printf '  %s└──────────────────────────────┴────────┴────────────────────┘%s\n' "$DIM" "$RST"
 }
