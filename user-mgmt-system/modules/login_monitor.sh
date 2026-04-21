@@ -17,11 +17,34 @@ detect_auth_log() {
 }
 
 show_login_report() {
-    echo -e "${GREEN}Last 20 logins:${NC}"
+    echo -e "${GREEN}Last 20 logins (from /var/log/wtmp):${NC}"
+    local out=""
     if command -v last &>/dev/null; then
-        last -n 20 2>/dev/null || echo -e "${YELLOW}[WARN]${NC} last command returned no data."
+        out=$(last -n 20 -a 2>/dev/null | sed '/^$/d;/^wtmp/d')
+    fi
+
+    if [[ -n "$out" ]]; then
+        echo "$out"
     else
-        echo -e "${RED}[ERROR]${NC} 'last' not available."
+        echo -e "${YELLOW}[INFO]${NC} 'last' returned no data — /var/log/wtmp may be empty or unreadable."
+        echo
+        echo -e "${GREEN}Fallback: per-user last login (lastlog):${NC}"
+        if command -v lastlog &>/dev/null; then
+            # lastlog reads /var/log/lastlog — per-user record of last login
+            lastlog 2>/dev/null | awk 'NR==1 || $2!="**Never"'
+        else
+            echo -e "${YELLOW}[INFO]${NC} 'lastlog' not available."
+        fi
+
+        echo
+        echo -e "${GREEN}Fallback: successful logins from auth log:${NC}"
+        local log
+        if log=$(detect_auth_log); then
+            grep -Ei "Accepted (password|publickey)|session opened" "$log" 2>/dev/null | tail -n 20 \
+                || echo -e "${YELLOW}[INFO]${NC} no successful logins found in $log"
+        else
+            echo -e "${YELLOW}[INFO]${NC} No auth log readable."
+        fi
     fi
 }
 
@@ -37,11 +60,40 @@ show_failed_attempts() {
 }
 
 show_active_users() {
-    echo -e "${GREEN}Currently logged in (who):${NC}"
-    who
+    local BOLD=$'\033[1m' DIM=$'\033[2m' RST=$'\033[0m' CY=$'\033[38;5;87m' GN=$'\033[38;5;114m'
+
+    echo -e "${GREEN}Currently logged-in sessions (who):${NC}"
+    if who | grep -q .; then
+        who
+    else
+        echo -e "${YELLOW}[INFO]${NC} No interactive sessions right now."
+    fi
+
     echo
     echo -e "${GREEN}Session detail (w):${NC}"
-    w
+    w 2>/dev/null || echo -e "${YELLOW}[INFO]${NC} 'w' unavailable."
+
+    # Also list every login-capable account on the system so newly-added
+    # users are visible even before they have logged in.
+    echo
+    echo -e "${GREEN}All accounts on this system (login-capable):${NC}"
+    printf '  %s┌──────────────────────┬────────┬──────────────────────┬──────────────┐%s\n' "$DIM" "$RST"
+    printf '  %s│%s %-20s %s│%s %-6s %s│%s %-20s %s│%s %-12s %s│%s\n' \
+        "$DIM" "$BOLD$CY" "USERNAME" "$RST$DIM" "$BOLD$CY" "UID" \
+        "$RST$DIM" "$BOLD$CY" "SHELL" "$RST$DIM" "$BOLD$CY" "STATUS" "$RST$DIM" "$RST"
+    printf '  %s├──────────────────────┼────────┼──────────────────────┼──────────────┤%s\n' "$DIM" "$RST"
+    while IFS=: read -r uname _ uid _ _ _ shell; do
+        if (( uid >= 1000 && uid < 65534 )); then
+            local status="offline"
+            if who | awk '{print $1}' | grep -qx "$uname"; then
+                status="${GN}ONLINE${RST}"
+            fi
+            printf '  %s│%s %-20s %s│%s %-6s %s│%s %-20s %s│%s %-20b %s│%s\n' \
+                "$DIM" "$RST" "$uname" "$DIM" "$RST" "$uid" \
+                "$DIM" "$RST" "$shell" "$DIM" "$RST" "$status" "$DIM" "$RST"
+        fi
+    done < /etc/passwd
+    printf '  %s└──────────────────────┴────────┴──────────────────────┴──────────────┘%s\n' "$DIM" "$RST"
 }
 
 flag_suspicious() {
@@ -83,20 +135,36 @@ flag_suspicious() {
 export_report() {
     local stamp
     stamp="$(date '+%Y-%m-%d %H:%M:%S')"
-    {
+
+    # Build the report block once, then both append AND print it.
+    local block
+    block=$({
         echo "================ REPORT $stamp ================"
         echo "--- last 20 logins ---"
-        last -n 20 2>/dev/null
-        echo "--- active users ---"
-        who
+        last -n 20 2>/dev/null || echo "(no wtmp data)"
+        echo
+        echo "--- active users (who) ---"
+        who 2>/dev/null || echo "(none)"
+        echo
+        echo "--- regular accounts on system ---"
+        awk -F: '$3>=1000 && $3<65534 {printf "  %-20s uid=%s shell=%s\n",$1,$3,$7}' /etc/passwd
+        echo
         echo "--- failed attempts (tail 30) ---"
         local log
         if log=$(detect_auth_log); then
-            grep -Ei "failed password|authentication failure" "$log" 2>/dev/null | tail -n 30
+            grep -Ei "failed password|authentication failure" "$log" 2>/dev/null | tail -n 30 \
+                || echo "(no failures logged)"
         else
-            echo "no auth log available"
+            echo "(no auth log available on this distro)"
         fi
         echo "================ END ================"
-    } >> "$REPORT_LOG"
+    })
+
+    # Append to persistent audit log
+    printf '%s\n' "$block" >> "$REPORT_LOG"
+
+    # Also show it on the terminal so the admin sees what was saved
+    printf '%s\n' "$block"
+    echo
     echo -e "${GREEN}[OK]${NC} Report appended to $REPORT_LOG"
 }

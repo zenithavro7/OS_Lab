@@ -53,6 +53,40 @@ bulk_create_users() {
     echo -e "${GREEN}Processed $line_no lines.${NC}"
 }
 
+add_user() {
+    # Interactive single-user creation (different from bulk CSV flow)
+    local username="$1" fullname="$2" role="$3" password="$4"
+
+    if [[ -z "$username" || -z "$role" || -z "$password" ]]; then
+        echo -e "${RED}[ERROR]${NC} username, role, and password are required."
+        return 1
+    fi
+
+    if id "$username" &>/dev/null; then
+        echo -e "${YELLOW}[SKIP]${NC} User $username already exists."
+        return 1
+    fi
+
+    if ! getent group "$role" &>/dev/null; then
+        groupadd "$role" && echo -e "${GREEN}[OK]${NC} Created group $role"
+    fi
+
+    if useradd -m -c "$fullname" -g "$role" -s /bin/bash "$username"; then
+        echo -e "${GREEN}[OK]${NC} Created user $username (home: /home/$username)"
+    else
+        echo -e "${RED}[ERROR]${NC} useradd failed for $username"
+        return 1
+    fi
+
+    if echo "${username}:${password}" | chpasswd; then
+        echo -e "${GREEN}[OK]${NC} Password set for $username"
+    else
+        echo -e "${RED}[ERROR]${NC} chpasswd failed for $username"
+        return 1
+    fi
+    return 0
+}
+
 delete_user() {
     local username="$1"
     if [[ -z "$username" ]]; then

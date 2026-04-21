@@ -72,11 +72,19 @@ center() {
     printf "%*s%s\n" "$pad" "" "$text"
 }
 
+# Cached once per session; recomputed only after user add/delete so the
+# banner doesn't hit /etc/passwd on every menu render.
+USER_COUNT=""
+refresh_user_count() {
+    USER_COUNT=$(awk -F: '$3>=1000 && $3<65534' /etc/passwd 2>/dev/null | wc -l | tr -d ' ')
+}
+refresh_user_count
+
 banner() {
     clear
     local host; host=$(hostname -s 2>/dev/null || echo localhost)
     local kernel; kernel=$(uname -sr 2>/dev/null || echo "Unknown")
-    local users; users=$(awk -F: '$3>=1000 && $3<65534' /etc/passwd 2>/dev/null | wc -l | tr -d ' ')
+    local users="$USER_COUNT"
     local now; now=$(date '+%Y-%m-%d %H:%M:%S')
 
     hr '━' "$BLUE"
@@ -155,26 +163,27 @@ print_menu() {
     banner
 
     section "👥  USER MANAGEMENT"
-    menu_item " 1" "📥" "Bulk Create Users"       "import users from CSV"
-    menu_item " 2" "🗑 " "Delete User"             "remove user + home dir"
-    menu_item " 3" "📋" "List Users"              "show all regular users"
+    menu_item " 1" "📥" "Bulk Create Users"       "import users from CSV (on demand)"
+    menu_item " 2" "➕" "Add New User"            "interactive single-user create"
+    menu_item " 3" "🗑 " "Delete User"             "remove user + home dir"
+    menu_item " 4" "📋" "List Users"              "show all regular users"
 
     section "🔐  ROLES & ACCESS"
-    menu_item " 4" "🏗 " "Setup Roles / Workspaces" "create groups + /var/workspace"
-    menu_item " 5" "🎭" "Assign Role to User"     "add user to role group"
-    menu_item " 6" "🔍" "Show Workspace Perms"    "inspect chmod/chown"
+    menu_item " 5" "🏗 " "Setup Roles / Workspaces" "create groups + /var/workspace"
+    menu_item " 6" "🎭" "Assign Role to User"     "add user to role group"
+    menu_item " 7" "🔍" "Show Workspace Perms"    "inspect chmod/chown"
 
     section "🛡   PASSWORD POLICY"
-    menu_item " 7" "📄" "Show Current Policy"     "view MIN_LEN / MAX_DAYS etc."
-    menu_item " 8" "⚙ " "Enforce Policy on User"  "apply aging via chage"
-    menu_item " 9" "🔑" "Check Password Strength" "length / upper / digit / special"
+    menu_item " 8" "📄" "Show Current Policy"     "view MIN_LEN / MAX_DAYS etc."
+    menu_item " 9" "⚙ " "Enforce Policy on User"  "apply aging via chage"
+    menu_item "10" "🔑" "Check Password Strength" "length / upper / digit / special"
 
     section "📡  LOGIN MONITORING"
-    menu_item "10" "📜" "Login Report"            "last 20 logins"
-    menu_item "11" "🚫" "Failed Attempts"         "grep auth log"
-    menu_item "12" "👁 " "Active Users"            "who + w"
-    menu_item "13" "🚨" "Flag Suspicious"         "threshold-based alerts"
-    menu_item "14" "💾" "Export Full Report"      "snapshot → activity.log"
+    menu_item "11" "📜" "Login Report"            "last 20 logins (with fallbacks)"
+    menu_item "12" "🚫" "Failed Attempts"         "grep auth log"
+    menu_item "13" "👁 " "Active Users"            "who + w + all accounts"
+    menu_item "14" "🚨" "Flag Suspicious"         "threshold-based alerts"
+    menu_item "15" "💾" "Export Full Report"      "snapshot → terminal + log"
 
     section "⚡  SYSTEM"
     menu_item " 0" "🚪" "Exit"                    "log out and quit"
@@ -184,7 +193,8 @@ print_menu() {
 
 # ─── Action wrappers (thin, so the loop stays readable) ───────────────────
 do_bulk_create() {
-    action_header "Bulk Create Users"
+    action_header "Bulk Create Users (CSV import)"
+    info "CSV format: username,fullname,role,password"
     prompt "Path to CSV" "$SCRIPT_DIR/sample_users.csv"
     read -r csv
     csv="${csv:-$SCRIPT_DIR/sample_users.csv}"
@@ -194,7 +204,37 @@ do_bulk_create() {
     else
         fail "Bulk create reported errors — see output above."
     fi
+    refresh_user_count
     log_action "Bulk create from $csv"
+}
+
+do_add_user() {
+    action_header "Add New User (interactive)"
+    prompt "Username"; read -r u
+    [[ -z "$u" ]] && { warn "Empty username — cancelled."; return; }
+
+    prompt "Full name" "$u"; read -r fn
+    fn="${fn:-$u}"
+
+    prompt "Role (admin / developer / intern)" "developer"; read -r r
+    r="${r:-developer}"
+
+    # Password VISIBLE while typing (per user request — note: shoulder-surfing risk)
+    prompt "Password (visible)"; read -r p
+    [[ -z "$p" ]] && { warn "Empty password — cancelled."; return; }
+
+    echo
+    info "Checking password strength…"
+    check_password_strength "$p" || warn "Password is weak — creating anyway (not recommended)."
+
+    echo
+    if add_user "$u" "$fn" "$r" "$p"; then
+        ok "User '$u' created as role '$r'."
+        refresh_user_count
+        log_action "Added user $u (role=$r)"
+    else
+        fail "Could not add user '$u'."
+    fi
 }
 
 do_delete_user() {
@@ -206,6 +246,7 @@ do_delete_user() {
     echo
     if delete_user "$u"; then
         ok "User '$u' deleted."
+        refresh_user_count
     else
         fail "Could not delete '$u'."
     fi
@@ -254,8 +295,10 @@ do_enforce_policy() {
 
 do_check_strength() {
     action_header "Password Strength Checker"
-    prompt_secret "Password (hidden)"
-    read -rs p; echo; echo
+    # Per user request: password is VISIBLE while typing so the admin
+    # can see exactly what is being tested.
+    prompt "Password (visible)"
+    read -r p; echo
     check_password_strength "$p"
 }
 
@@ -295,19 +338,20 @@ main_loop() {
         read -r choice
         case "$choice" in
             1)  do_bulk_create;       pause ;;
-            2)  do_delete_user;       pause ;;
-            3)  do_list_users;        pause ;;
-            4)  do_setup_roles;       pause ;;
-            5)  do_assign_role;       pause ;;
-            6)  do_show_perms;        pause ;;
-            7)  do_show_policy;       pause ;;
-            8)  do_enforce_policy;    pause ;;
-            9)  do_check_strength;    pause ;;
-            10) do_login_report;      pause ;;
-            11) do_failed;            pause ;;
-            12) do_active;            pause ;;
-            13) do_flag_suspicious;   pause ;;
-            14) do_export_report;     pause ;;
+            2)  do_add_user;          pause ;;
+            3)  do_delete_user;       pause ;;
+            4)  do_list_users;        pause ;;
+            5)  do_setup_roles;       pause ;;
+            6)  do_assign_role;       pause ;;
+            7)  do_show_perms;        pause ;;
+            8)  do_show_policy;       pause ;;
+            9)  do_enforce_policy;    pause ;;
+            10) do_check_strength;    pause ;;
+            11) do_login_report;      pause ;;
+            12) do_failed;            pause ;;
+            13) do_active;            pause ;;
+            14) do_flag_suspicious;   pause ;;
+            15) do_export_report;     pause ;;
             0)  do_exit ;;
             "") ;; # re-render on empty input
             *)  fail "Unknown option: '$choice' — pick a number from the menu."; pause ;;
