@@ -1,6 +1,7 @@
 username,fullname,role,password
-alice,Alice Admin,admin,Adm1n@Pass1
-bob,Bob Builder,developer,D3v@Pass22
-carol,Carol Coder,developer,C0d3r@Pass3
-dave,Dave Intern,intern,Int3rn@Pass4
-eve,Eve Intern,intern,Ev3@Passw0rd
+rohim,Rohim, Admin,admin,Adm1n@Pass1
+korim,Korim Builder,developer,D3v@Pass22
+turjo,Turjo Coder,developer,C0d3r@Pass3
+avro,Avro Intern,intern,Int3rn@Pass4
+bijoy,Bijoy Intern,intern,Ev3@Passw0rd
+
